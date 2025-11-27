@@ -32,89 +32,103 @@ def load_and_preprocess_data(filepath="Data/ceo_types_v0.2.csv"):
         print(f"Error: File not found at {filepath}")
         return None
 
-    # --- Select Relevant Columns ---
-    # Firm Features: 
-    #   Dense: logat (Size), rdint (R&D), leverage, roa
-    #   Categorical: ind (Industry)
-    # CEO Features:
-    #   Dense: Age
-    #   Derived: Tenure (fiscalyear - ceo_year)
-    #   Categorical: Gender, maxedu, ivy
-    # Target: match_means (Posterior Match Quality)
+    # --- Define Required Columns ---
+    # Identifiers
+    id_cols = ['gvkey', 'match_exec_id']
     
-    required_cols = [
-        'logat', 'rdint', 'leverage', 'roa', 'ind',         # Firm
-        'Age', 'ceo_year', 'fiscalyear', 'Gender', 'maxedu', 'ivy', # CEO
-        'match_means'                                       # Target
-    ]
+    # CEO Variables
+    ceo_raw_cols = ['maxedu', 'ivy', 'Age', 'DOB', 'ceo_year', 'Gender', 
+                    'Output', 'Throghput', 'Peripheral', 'year_born', 'dep_baby_ceo']
     
-    # Check for missing columns
-    missing = [c for c in required_cols if c not in df.columns]
+    # Firm Variables
+    firm_raw_cols = ['compindustry', 'ind_firms_60', 'non_competition_score', 'boardindpw', 
+                     'boardsizew', 'busyw', 'pct_blockw', 'logat', 'exp_roa', 'fiscalyear'] # fiscalyear needed for tenure
+    
+    # Target & Weight
+    target_weight_cols = ['match_means', 'sd_match_means']
+    
+    all_required_cols = id_cols + ceo_raw_cols + firm_raw_cols + target_weight_cols
+    
+    # --- Check for Missing Columns and Filter DataFrame ---
+    missing = [c for c in all_required_cols if c not in df.columns]
     if missing:
-        print(f"Warning: Missing columns in CSV: {missing}")
-        # Drop missing from required to attempt loading partially or raise error
-        # For now, we strictly require them.
+        print(f"Error: Missing essential columns in CSV: {missing}. Please ensure all required columns are present.")
         return None
 
-    df = df[required_cols].copy()
+    df = df[all_required_cols].copy()
     
-    # --- Cleaning ---
-    # Drop rows with NaNs in critical columns
+    # --- Cleaning: Drop rows with any NaN in required columns ---
     initial_len = len(df)
     df = df.dropna()
     print(f"Dropped {initial_len - len(df)} rows with missing values. Final count: {len(df)}")
     
     # --- Feature Engineering ---
-    # Tenure
+    # Calculate CEO Tenure
     df['tenure'] = df['fiscalyear'] - df['ceo_year']
-    # Clip negative tenure (data errors) to 0
-    df['tenure'] = df['tenure'].clip(lower=0)
+    df['tenure'] = df['tenure'].clip(lower=0) # Clip negative tenure to 0 for robustness
     
-    # --- Encoders (Categorical) ---
-    # Industry
-    ind_encoder = LabelEncoder()
-    df['ind_code'] = ind_encoder.fit_transform(df['ind'].astype(str))
+    # --- Categorical Encoding ---
+    # Firm Industry
+    compindustry_encoder = LabelEncoder()
+    df['compindustry_code'] = compindustry_encoder.fit_transform(df['compindustry'].astype(str))
     
-    # Gender
+    # CEO Gender
     gender_encoder = LabelEncoder()
     df['gender_code'] = gender_encoder.fit_transform(df['Gender'].astype(str))
     
-    # MaxEdu & Ivy (ensure they are safe integers for Embedding)
-    # Assuming maxedu is 1-based or similar, we map to 0-based if needed, 
-    # but if it's already small ints, just ensuring int type is enough.
-    # We'll assume maxedu and ivy are already integer codes or simple floats.
+    # Ensure maxedu and ivy are treated as integers for embedding
     df['maxedu'] = df['maxedu'].astype(int)
     df['ivy'] = df['ivy'].astype(int)
+
+    # --- Define Dense Feature Sets ---
+    firm_dense_cols = [
+        'ind_firms_60', 'non_competition_score', 'boardindpw', 'boardsizew', 
+        'busyw', 'pct_blockw', 'logat', 'exp_roa'
+    ]
+    ceo_dense_cols = [
+        'Age', 'Output', 'Throghput', 'Peripheral', 'tenure'
+    ]
     
-    # --- Scalers (Dense) ---
-    firm_dense_cols = ['logat', 'rdint', 'leverage', 'roa']
-    ceo_dense_cols = ['Age', 'tenure']
-    
+    # --- Standardize Dense Features ---
     scaler_firm = StandardScaler()
     df[firm_dense_cols] = scaler_firm.fit_transform(df[firm_dense_cols])
     
     scaler_ceo = StandardScaler()
     df[ceo_dense_cols] = scaler_ceo.fit_transform(df[ceo_dense_cols])
     
-    # --- To Tensors ---
-    # We create a dictionary to hold the dataset tensors and metadata
+    # --- Calculate Sample Weights ---
+    # Weights are inverse of variance (1/sd^2). Add epsilon for stability.
+    epsilon = 1e-6
+    df['weights'] = 1 / (df['sd_match_means']**2 + epsilon)
+    # Normalize weights to sum to 1 to avoid changing overall loss scale too much, if desired.
+    # df['weights'] = df['weights'] / df['weights'].sum() 
+    
+    # --- Convert to Tensors ---
     data = {
-        # Features
+        # Identifiers (for potential future use, not directly in model input)
+        'gvkey': torch.tensor(df['gvkey'].values, dtype=torch.long),
+        'match_exec_id': torch.tensor(df['match_exec_id'].values, dtype=torch.long),
+
+        # Firm Features
         'firm_dense': torch.tensor(df[firm_dense_cols].values, dtype=torch.float32),
-        'firm_ind': torch.tensor(df['ind_code'].values, dtype=torch.long),
+        'firm_compindustry': torch.tensor(df['compindustry_code'].values, dtype=torch.long),
         
+        # CEO Features
         'ceo_dense': torch.tensor(df[ceo_dense_cols].values, dtype=torch.float32),
         'ceo_gender': torch.tensor(df['gender_code'].values, dtype=torch.long),
-        'ceo_edu': torch.tensor(df['maxedu'].values, dtype=torch.long),
+        'ceo_maxedu': torch.tensor(df['maxedu'].values, dtype=torch.long),
         'ceo_ivy': torch.tensor(df['ivy'].values, dtype=torch.long),
         
-        # Target
+        # Target & Weights
         'target': torch.tensor(df['match_means'].values, dtype=torch.float32).view(-1, 1),
+        'weights': torch.tensor(df['weights'].values, dtype=torch.float32).view(-1, 1),
         
-        # Metadata (Dimensions for Model)
-        'n_firm_ind': len(ind_encoder.classes_),
+        # Metadata for model init (Embedding sizes)
+        'n_firm_dense': len(firm_dense_cols),
+        'n_firm_compindustry': len(compindustry_encoder.classes_),
+        'n_ceo_dense': len(ceo_dense_cols),
         'n_ceo_gender': len(gender_encoder.classes_),
-        'n_ceo_edu': int(df['maxedu'].max()) + 1,
+        'n_ceo_maxedu': int(df['maxedu'].max()) + 1, # Max value + 1 for embedding size
         'n_ceo_ivy': int(df['ivy'].max()) + 1,
         
         # For Visualization later (unscaled or raw helpers)
@@ -131,22 +145,22 @@ def load_and_preprocess_data(filepath="Data/ceo_types_v0.2.csv"):
 # ==========================================
 class CEOFirmMatcher(nn.Module):
     def __init__(self, 
-                 n_firm_dense=4, n_firm_ind=10,
-                 n_ceo_dense=2, n_ceo_gender=2, n_ceo_edu=10, n_ceo_ivy=2,
+                 n_firm_dense, n_firm_compindustry,
+                 n_ceo_dense, n_ceo_gender, n_ceo_maxedu, n_ceo_ivy,
                  latent_dim=32):
         super(CEOFirmMatcher, self).__init__()
         
         # --- Embeddings ---
-        self.firm_ind_emb = nn.Embedding(n_firm_ind, 8)
+        self.firm_compindustry_emb = nn.Embedding(n_firm_compindustry, 8) # Embedding size 8
         
-        self.ceo_gender_emb = nn.Embedding(n_ceo_gender, 4)
-        self.ceo_edu_emb = nn.Embedding(n_ceo_edu, 4)
-        self.ceo_ivy_emb = nn.Embedding(n_ceo_ivy, 2)
+        self.ceo_gender_emb = nn.Embedding(n_ceo_gender, 4) # Embedding size 4
+        self.ceo_maxedu_emb = nn.Embedding(n_ceo_maxedu, 4) # Embedding size 4
+        self.ceo_ivy_emb = nn.Embedding(n_ceo_ivy, 2)       # Embedding size 2
         
         # --- TOWER A: FIRM ENCODER ---
-        # Input = Dense(4) + Ind_Emb(8) = 12
+        firm_input_dim = n_firm_dense + 8 # Dense features + compindustry embedding
         self.firm_tower = nn.Sequential(
-            nn.Linear(n_firm_dense + 8, 64),
+            nn.Linear(firm_input_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
@@ -154,26 +168,26 @@ class CEOFirmMatcher(nn.Module):
         )
         
         # --- TOWER B: CEO ENCODER ---
-        # Input = Dense(2) + Gender(4) + Edu(4) + Ivy(2) = 12
+        ceo_input_dim = n_ceo_dense + 4 + 4 + 2 # Dense features + gender + maxedu + ivy embeddings
         self.ceo_tower = nn.Sequential(
-            nn.Linear(n_ceo_dense + 4 + 4 + 2, 64),
+            nn.Linear(ceo_input_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.Linear(32, latent_dim)
         )
         
-    def forward(self, f_dense, f_ind, c_dense, c_gender, c_edu, c_ivy):
+    def forward(self, f_dense, f_compindustry, c_dense, c_gender, c_maxedu, c_ivy):
         # Firm Tower
-        f_ind_vec = self.firm_ind_emb(f_ind)
-        f_combined = torch.cat([f_dense, f_ind_vec], dim=1)
+        f_compindustry_vec = self.firm_compindustry_emb(f_compindustry)
+        f_combined = torch.cat([f_dense, f_compindustry_vec], dim=1)
         u_firm = self.firm_tower(f_combined)
         
         # CEO Tower
-        c_g_vec = self.ceo_gender_emb(c_gender)
-        c_e_vec = self.ceo_edu_emb(c_edu)
-        c_i_vec = self.ceo_ivy_emb(c_ivy)
-        c_combined = torch.cat([c_dense, c_g_vec, c_e_vec, c_i_vec], dim=1)
+        c_gender_vec = self.ceo_gender_emb(c_gender)
+        c_maxedu_vec = self.ceo_maxedu_emb(c_maxedu)
+        c_ivy_vec = self.ceo_ivy_emb(c_ivy)
+        c_combined = torch.cat([c_dense, c_gender_vec, c_maxedu_vec, c_ivy_vec], dim=1)
         v_ceo = self.ceo_tower(c_combined)
         
         # Match Score (Dot Product)
@@ -188,11 +202,13 @@ def train_model():
     if data is None:
         return None, None
 
-    # Init Model
+    # Init Model with dynamic dimensions from loaded data
     model = CEOFirmMatcher(
-        n_firm_ind=data['n_firm_ind'],
+        n_firm_dense=data['n_firm_dense'], 
+        n_firm_compindustry=data['n_firm_compindustry'],
+        n_ceo_dense=data['n_ceo_dense'], 
         n_ceo_gender=data['n_ceo_gender'],
-        n_ceo_edu=data['n_ceo_edu'],
+        n_ceo_maxedu=data['n_ceo_maxedu'], 
         n_ceo_ivy=data['n_ceo_ivy']
     ).to(DEVICE)
     
@@ -201,26 +217,30 @@ def train_model():
         if isinstance(v, torch.Tensor):
             data[k] = v.to(DEVICE)
             
-    criterion = nn.MSELoss()
+    # Optimizer
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
     print(f"Training on {DEVICE}...")
     
     epochs = 20
     for epoch in range(epochs):
+        model.train() # Set model to training mode
         optimizer.zero_grad()
         
         preds = model(
-            data['firm_dense'], data['firm_ind'],
-            data['ceo_dense'], data['ceo_gender'], data['ceo_edu'], data['ceo_ivy']
+            data['firm_dense'], data['firm_compindustry'],
+            data['ceo_dense'], data['ceo_gender'], data['ceo_maxedu'], data['ceo_ivy']
         )
         
-        loss = criterion(preds, data['target'])
+        # Weighted MSE Loss
+        # criterion = (weights * (predictions - target)**2).mean()
+        loss = (data['weights'] * (preds - data['target'])**2).mean()
+        
         loss.backward()
         optimizer.step()
         
         if epoch % 5 == 0:
-            print(f"Epoch {epoch}: MSE Loss = {loss.item():.4f}")
+            print(f"Epoch {epoch}: Weighted MSE Loss = {loss.item():.4f}")
             
     return model, data
 
@@ -231,56 +251,59 @@ def plot_interaction_heatmap(model, data):
     if model is None or data is None:
         return
 
-    # We'll visualize: Firm R&D (rdint) vs CEO Education (maxedu)
-    # Assuming interaction: High R&D firms might match better with higher edu?
+    # We'll visualize: Firm Log(Assets) (logat) vs CEO Age
     
-    print("Generating interaction heatmap (Firm R&D vs CEO Edu)...")
+    print("Generating interaction heatmap (Firm Log(Assets) vs CEO Age)...")
     
-    # Create Grid
-    rd_vals = np.linspace(-2, 2, 50) # Standardized range (approx -2 to +2 sigma)
-    edu_levels = np.unique(data['raw_df']['maxedu']) # Use actual education levels found
-    edu_levels = np.sort(edu_levels)
+    # Create Grid for logat and Age
+    # Use actual min/max of scaled data for better visualization range
+    logat_min, logat_max = data['firm_dense'][:, data['firm_scaler'].feature_names_in_ == 'logat'].min().item(), data['firm_dense'][:, data['firm_scaler'].feature_names_in_ == 'logat'].max().item()
+    age_min, age_max = data['ceo_dense'][:, data['ceo_scaler'].feature_names_in_ == 'Age'].min().item(), data['ceo_dense'][:, data['ceo_scaler'].feature_names_in_ == 'Age'].max().item()
     
-    heatmap = np.zeros((len(edu_levels), len(rd_vals)))
+    logat_vals = np.linspace(logat_min, logat_max, 50)
+    age_vals = np.linspace(age_min, age_max, 50)
     
-    # Averages for other features (to hold them constant)
-    # We need these as 1-element tensors on DEVICE
-    avg_f_dense = torch.mean(data['firm_dense'], dim=0, keepdim=True) # [1, 4]
-    avg_c_dense = torch.mean(data['ceo_dense'], dim=0, keepdim=True) # [1, 2]
+    heatmap = np.zeros((len(age_vals), len(logat_vals)))
     
-    # Most common/mode for categoricals
-    mode_ind = torch.mode(data['firm_ind'])[0].view(1)
-    mode_gender = torch.mode(data['ceo_gender'])[0].view(1)
-    mode_ivy = torch.mode(data['ceo_ivy'])[0].view(1)
+    # Averages/Modes for other features to hold them constant
+    avg_f_dense = torch.mean(data['firm_dense'], dim=0, keepdim=True).to(DEVICE)
+    avg_c_dense = torch.mean(data['ceo_dense'], dim=0, keepdim=True).to(DEVICE)
     
-    model.eval()
+    mode_compindustry = torch.mode(data['firm_compindustry'])[0].view(1).to(DEVICE)
+    mode_gender = torch.mode(data['ceo_gender'])[0].view(1).to(DEVICE)
+    mode_maxedu = torch.mode(data['ceo_maxedu'])[0].view(1).to(DEVICE)
+    mode_ivy = torch.mode(data['ceo_ivy'])[0].view(1).to(DEVICE)
+    
+    model.eval() # Set model to evaluation mode
     with torch.no_grad():
-        for i, edu in enumerate(edu_levels):
-            for j, rd in enumerate(rd_vals):
-                # Construct Firm Input: modify R&D (index 1 in dense: logat, rdint, lev, roa)
+        for i, age_val in enumerate(age_vals):
+            for j, logat_val in enumerate(logat_vals):
+                # Construct Firm Input: modify logat (index based on firm_dense_cols)
                 f_dense_input = avg_f_dense.clone()
-                f_dense_input[0, 1] = float(rd) 
+                logat_idx = data['firm_scaler'].feature_names_in_ == 'logat'
+                f_dense_input[:, logat_idx] = float(logat_val)
                 
-                # Construct CEO Input: modify Edu
-                c_edu_input = torch.tensor([edu], dtype=torch.long).to(DEVICE)
+                # Construct CEO Input: modify Age (index based on ceo_dense_cols)
+                c_dense_input = avg_c_dense.clone()
+                age_idx = data['ceo_scaler'].feature_names_in_ == 'Age'
+                c_dense_input[:, age_idx] = float(age_val)
                 
                 # Predict
                 score = model(
-                    f_dense_input, mode_ind,
-                    avg_c_dense, mode_gender, c_edu_input, mode_ivy
+                    f_dense_input, mode_compindustry,
+                    c_dense_input, mode_gender, mode_maxedu, mode_ivy
                 )
                 heatmap[i, j] = score.item()
                 
     plt.figure(figsize=(10, 6))
     plt.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower',
-               extent=[rd_vals.min(), rd_vals.max(), edu_levels.min(), edu_levels.max()])
+               extent=[logat_vals.min(), logat_vals.max(), age_vals.min(), age_vals.max()])
     plt.colorbar(label='Predicted Match Quality')
-    plt.xlabel('Firm R&D Intensity (Standardized)')
-    plt.ylabel('CEO Education Level')
-    plt.title('Interaction: Firm R&D vs CEO Education')
+    plt.xlabel('Firm Log(Assets) (Standardized)')
+    plt.ylabel('CEO Age (Standardized)')
+    plt.title('Interaction: Firm Log(Assets) vs CEO Age')
     plt.show()
 
 if __name__ == "__main__":
     trained_model, processed_data = train_model()
     plot_interaction_heatmap(trained_model, processed_data)
-
