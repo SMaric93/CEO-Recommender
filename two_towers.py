@@ -5,7 +5,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import shap
+import argparse
+import sys
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.model_selection import train_test_split
 from typing import Dict, Tuple, Any, List, Optional
 
 # ==========================================
@@ -513,12 +516,23 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor):
 # MAIN EXECUTION
 # ==========================================
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train Two Towers Model")
+    parser.add_argument('--synthetic', action='store_true', help='Use synthetic data for verification')
+    args = parser.parse_args()
+
     config = Config()
     print(f"Running Two Towers Model on {config.DEVICE}")
     
     # 1. Data Processing
     processor = DataProcessor(config)
-    raw_df = processor.load_data()
+    
+    if args.synthetic:
+        print("Using SYNTHETIC data...")
+        from synthetic_data import generate_synthetic_data
+        raw_df = generate_synthetic_data(1000)
+    else:
+        raw_df = processor.load_data()
+        
     processed_data = processor.preprocess(raw_df)
     
     # 2. Training
@@ -526,9 +540,6 @@ if __name__ == "__main__":
         trained_model = train_model(processed_data, config)
         
         if trained_model:
-            # 3. Interaction Plot
-            plot_interaction_heatmap(trained_model, processor)
-            
             # 4. Explainability
             wrapper = ModelWrapper(trained_model, processor)
             
@@ -537,4 +548,8 @@ if __name__ == "__main__":
                               ['logat', 'Age', 'tenure', 'exp_roa', 'non_competition_score'])
             
             # SHAP
-            explain_model_shap(wrapper, processor.processed_df)
+            train_df, val_df = train_test_split(processor.processed_df, test_size=0.2)
+            # explain_model_shap(wrapper, val_df)
+
+            # 3. Interaction Plot
+            plot_interaction_heatmap(trained_model, processor)
