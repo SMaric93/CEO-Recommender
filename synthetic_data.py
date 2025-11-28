@@ -38,6 +38,8 @@ def generate_synthetic_data(n_samples=1000):
         'pct_blockw': np.random.uniform(0, 100, n_samples),
         'logat': np.random.uniform(5, 15, n_samples),
         'exp_roa': np.random.normal(0.05, 0.02, n_samples),
+        'xrd_int': np.random.uniform(0, 0.2, n_samples),
+        'capx_int': np.random.uniform(0, 0.3, n_samples),
         
         # Firm Categorical
         'compindustry': np.random.choice(['Tech', 'Finance', 'Health', 'Energy'], n_samples),

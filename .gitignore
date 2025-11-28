@@ -1,6 +1,7 @@
 # Data files
 Data/
 data/
+Output/
 *.csv
 *.parquet
 *.feather

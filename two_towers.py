@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import shap
 import argparse
 import sys
+import os
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from typing import Dict, Tuple, Any, List, Optional
@@ -42,7 +43,8 @@ class Config:
     
     # Firm Features
     FIRM_NUMERIC_COLS = ['ind_firms_60', 'non_competition_score', 'boardindpw', 
-                         'boardsizew', 'busyw', 'pct_blockw', 'logat', 'exp_roa']
+                         'boardsizew', 'busyw', 'pct_blockw', 'logat', 'exp_roa',
+                         'rdintw', 'capintw']
     FIRM_CAT_COLS = ['compindustry']
     FIRM_RAW_COLS = FIRM_NUMERIC_COLS + FIRM_CAT_COLS + ['fiscalyear']
 
@@ -105,7 +107,7 @@ class DataProcessor:
             
         # 1. Cleaning
         initial_len = len(df)
-        df = df.dropna()
+        df = df.dropna().copy()
         print(f"Dropped {initial_len - len(df)} rows with NaNs. Final count: {len(df)}")
         
         # 2. Feature Engineering
@@ -403,7 +405,10 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
         ax.grid(True, alpha=0.3)
         
     plt.tight_layout()
-    plt.show()
+    os.makedirs("Output", exist_ok=True)
+    plt.savefig("Output/pdp_plots.svg")
+    print("Saved PDP plots to Output/pdp_plots.svg")
+    plt.close()
 
 def explain_model_shap(wrapper: ModelWrapper, df: pd.DataFrame):
     """Generates SHAP summary plot."""
@@ -440,77 +445,119 @@ def explain_model_shap(wrapper: ModelWrapper, df: pd.DataFrame):
     shap.summary_plot(shap_values, X_subset, feature_names=feature_names, show=False)
     plt.title("SHAP Feature Importance")
     plt.tight_layout()
-    plt.show()
+    os.makedirs("Output", exist_ok=True)
+    plt.savefig("Output/shap_summary.svg")
+    print("Saved SHAP summary to Output/shap_summary.svg")
+    plt.close()
 
 # ==========================================
 # 6. VISUALIZATION (Interaction Heatmap)
 # ==========================================
-def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor):
+def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor, 
+                             x_feature: str, y_feature: str, filename: str):
     if model is None or processor.processed_df is None:
         return
 
-    print("\nGenerating interaction heatmap (Firm Log(Assets) vs CEO Age)...")
+    print(f"\nGenerating interaction heatmap ({x_feature} vs {y_feature})...")
     
-    # Prepare data for evaluation (reuse the processor to get tensors)
-    # Note: We generate fresh tensors from the dataframe to ensure we have valid references
-    # even if the 'data' dict from training was garbage collected or modified.
+    # Prepare data
     data_dict = processor._to_tensors(processor.processed_df)
     tensor_keys = [k for k in data_dict.keys() if isinstance(data_dict[k], torch.Tensor)]
     device_data = {k: data_dict[k].to(processor.cfg.DEVICE) for k in tensor_keys}
     
-    # Get Indices for features to vary
+    # Helper to find feature index and type
+    def get_feature_info(name):
+        if name in processor.final_firm_numeric:
+            idx = list(processor.scalers['firm'].feature_names_in_).index(name)
+            return 'firm_numeric', idx
+        elif name in processor.final_ceo_numeric:
+            idx = list(processor.scalers['ceo'].feature_names_in_).index(name)
+            return 'ceo_numeric', idx
+        elif name == 'ivy':
+            return 'ceo_ivy', 0
+        else:
+            raise ValueError(f"Feature {name} not supported for heatmap (must be numeric or 'ivy').")
+
     try:
-        logat_idx = list(processor.scalers['firm'].feature_names_in_).index('logat')
-        age_idx = list(processor.scalers['ceo'].feature_names_in_).index('Age')
-    except (ValueError, KeyError) as e:
-        print(f"Visualization Error: Feature not found in scaler - {e}")
+        x_type, x_idx = get_feature_info(x_feature)
+        y_type, y_idx = get_feature_info(y_feature)
+    except ValueError as e:
+        print(f"Visualization Error: {e}")
         return
 
-    # Define Grid Range based on actual data distribution
-    # Using min/max of the scaled data
-    logat_vals = np.linspace(device_data['firm_numeric'][:, logat_idx].min().item(), 
-                             device_data['firm_numeric'][:, logat_idx].max().item(), 50)
-    age_vals = np.linspace(device_data['ceo_numeric'][:, age_idx].min().item(), 
-                           device_data['ceo_numeric'][:, age_idx].max().item(), 50)
+    # Define Grid Range
+    def get_range(feat_type, feat_idx):
+        if feat_type == 'ceo_ivy':
+            return np.array([0, 1])
+        else:
+            return np.linspace(device_data[feat_type][:, feat_idx].min().item(), 
+                               device_data[feat_type][:, feat_idx].max().item(), 50)
+
+    x_vals = get_range(x_type, x_idx)
+    y_vals = get_range(y_type, y_idx)
     
-    heatmap = np.zeros((len(age_vals), len(logat_vals)))
+    heatmap = np.zeros((len(y_vals), len(x_vals)))
     
-    # Calculate Baselines (Averages/Modes) to hold other features constant
+    # Baselines
     avg_f_numeric = torch.mean(device_data['firm_numeric'], dim=0, keepdim=True)
     avg_c_numeric = torch.mean(device_data['ceo_numeric'], dim=0, keepdim=True)
     
-    mode_compindustry = torch.mode(device_data['firm_compindustry'])[0].view(1)
-    mode_gender = torch.mode(device_data['ceo_gender'])[0].view(1)
-    mode_maxedu = torch.mode(device_data['ceo_maxedu'])[0].view(1)
-    mode_ivy = torch.mode(device_data['ceo_ivy'])[0].view(1)
+    def calculate_mode(tensor):
+        """Helper to calculate mode, handling MPS limitations."""
+        if tensor.device.type == 'mps':
+            return torch.mode(tensor.cpu())[0].to(tensor.device).view(1)
+        return torch.mode(tensor)[0].view(1)
+
+    mode_compindustry = calculate_mode(device_data['firm_compindustry'])
+    mode_gender = calculate_mode(device_data['ceo_gender'])
+    mode_maxedu = calculate_mode(device_data['ceo_maxedu'])
+    mode_ivy = calculate_mode(device_data['ceo_ivy'])
     
     model.eval()
     with torch.no_grad():
-        for i, age_val in enumerate(age_vals):
-            for j, logat_val in enumerate(logat_vals):
-                # Construct Firm Input
+        for i, y_val in enumerate(y_vals):
+            for j, x_val in enumerate(x_vals):
+                # Reset inputs to baseline
                 f_in = avg_f_numeric.clone()
-                f_in[:, logat_idx] = float(logat_val)
-                
-                # Construct CEO Input
                 c_in = avg_c_numeric.clone()
-                c_in[:, age_idx] = float(age_val)
+                c_ivy_in = mode_ivy.clone()
+                
+                # Update X feature
+                if x_type == 'firm_numeric':
+                    f_in[:, x_idx] = float(x_val)
+                elif x_type == 'ceo_numeric':
+                    c_in[:, x_idx] = float(x_val)
+                elif x_type == 'ceo_ivy':
+                    c_ivy_in[0] = int(x_val)
+                    
+                # Update Y feature
+                if y_type == 'firm_numeric':
+                    f_in[:, y_idx] = float(y_val)
+                elif y_type == 'ceo_numeric':
+                    c_in[:, y_idx] = float(y_val)
+                elif y_type == 'ceo_ivy':
+                    c_ivy_in[0] = int(y_val)
                 
                 score = model(
                     f_in, mode_compindustry,
-                    c_in, mode_gender, mode_maxedu, mode_ivy
+                    c_in, mode_gender, mode_maxedu, c_ivy_in
                 )
                 heatmap[i, j] = score.item()
 
     # Plotting
     plt.figure(figsize=(10, 6))
     plt.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower',
-               extent=[logat_vals.min(), logat_vals.max(), age_vals.min(), age_vals.max()])
+               extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()])
     plt.colorbar(label='Predicted Match Quality')
-    plt.xlabel('Firm Log(Assets) (Standardized)')
-    plt.ylabel('CEO Age (Standardized)')
-    plt.title('Interaction: Firm Log(Assets) vs CEO Age')
-    plt.show()
+    plt.xlabel(f'{x_feature} (Standardized)')
+    plt.ylabel(f'{y_feature} (Standardized)')
+    plt.title(f'Interaction: {x_feature} vs {y_feature}')
+    
+    os.makedirs("Output", exist_ok=True)
+    path = os.path.join("Output", filename)
+    plt.savefig(path)
+    print(f"Saved heatmap to {path}")
+    plt.close()
 
 # ==========================================
 # MAIN EXECUTION
@@ -545,11 +592,22 @@ if __name__ == "__main__":
             
             # PDP for key features
             explain_model_pdp(wrapper, processor.processed_df, 
-                              ['logat', 'Age', 'tenure', 'exp_roa', 'non_competition_score'])
+                              ['logat', 'Age', 'tenure', 'exp_roa', 'non_competition_score', 
+                               'Output', 'Throghput', 'Peripheral',
+                               'boardindpw', 'boardsizew', 'busyw', 'pct_blockw',
+                               'rdintw', 'capintw', 'ind_firms_60'])
             
             # SHAP
             train_df, val_df = train_test_split(processor.processed_df, test_size=0.2)
             # explain_model_shap(wrapper, val_df)
 
-            # 3. Interaction Plot
-            plot_interaction_heatmap(trained_model, processor)
+            # 3. Interaction Plots
+            plot_interaction_heatmap(trained_model, processor, 'logat', 'Age', 'heatmap_size_age.svg')
+            plot_interaction_heatmap(trained_model, processor, 'logat', 'Output', 'heatmap_size_skill.svg')
+            plot_interaction_heatmap(trained_model, processor, 'exp_roa', 'tenure', 'heatmap_perf_exp.svg')
+            
+            # New Heatmaps
+            plot_interaction_heatmap(trained_model, processor, 'rdintw', 'Output', 'heatmap_rd_skill.svg')
+            plot_interaction_heatmap(trained_model, processor, 'rdintw', 'Age', 'heatmap_rd_age.svg')
+            plot_interaction_heatmap(trained_model, processor, 'logat', 'ivy', 'heatmap_size_ivy.svg')
+            plot_interaction_heatmap(trained_model, processor, 'tenure', 'boardindpw', 'heatmap_tenure_boardind.svg')
