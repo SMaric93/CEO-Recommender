@@ -11,6 +11,7 @@ import os
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from typing import Dict, Tuple, Any, List, Optional
+from torch.utils.data import Dataset, DataLoader
 
 # ==========================================
 # 1. CONFIGURATION
@@ -22,30 +23,31 @@ class Config:
                           else "cuda" if torch.cuda.is_available() 
                           else "cpu")
     DATA_PATH = "Data/ceo_types_v0.2.csv"
+    OUTPUT_PATH = "/Users/smaric/Papers/Complementarities/Data/BLM Replication Final/Two Towers Implementation/Output"
     
     # Hyperparameters
-    EPOCHS = 20
-    LEARNING_RATE = 0.001
-    LATENT_DIM = 32
+    EPOCHS = 40
+    LEARNING_RATE = 0.0004
+    LATENT_DIM = 60
     
     # Embedding Dimensions
     EMBEDDING_DIM_SMALL = 2
-    EMBEDDING_DIM_MEDIUM = 4
-    EMBEDDING_DIM_LARGE = 8
-    
+    EMBEDDING_DIM_MEDIUM = 8
+    EMBEDDING_DIM_LARGE = 48
+
     # Feature Definitions
     ID_COLS = ['gvkey', 'match_exec_id']
     
     # CEO Features
-    CEO_NUMERIC_COLS = ['Age', 'Output', 'Throghput', 'Peripheral'] # 'tenure' will be derived
-    CEO_CAT_COLS = ['Gender', 'maxedu', 'ivy']
-    CEO_RAW_COLS = CEO_NUMERIC_COLS + CEO_CAT_COLS + ['ceo_year', 'year_born', 'dep_baby_ceo', 'DOB']
+    CEO_NUMERIC_COLS = ['Age'] # 'tenure' will be derived
+    CEO_CAT_COLS = ['Gender', 'maxedu', 'ivy', 'm', 'Output', 'Throghput', 'Peripheral']
+    CEO_RAW_COLS = CEO_NUMERIC_COLS + CEO_CAT_COLS + ['ceo_year', 'dep_baby_ceo']
     
     # Firm Features
-    FIRM_NUMERIC_COLS = ['ind_firms_60', 'non_competition_score', 'boardindpw', 
-                         'boardsizew', 'busyw', 'pct_blockw', 'logat', 'exp_roa',
-                         'rdintw', 'capintw']
-    FIRM_CAT_COLS = ['compindustry']
+    FIRM_NUMERIC_COLS = ['ind_firms_60w', 'non_competition_score', 'boardindpw', 
+                         'boardsizew', 'busyw', 'pct_blockw', 'logatw', 'exp_roa',
+                         'rdintw', 'capintw', 'leverage', 'divyieldw']
+    FIRM_CAT_COLS = ['compindustry', 'ba_state', 'rd_control', 'dpayer']
     FIRM_RAW_COLS = FIRM_NUMERIC_COLS + FIRM_CAT_COLS + ['fiscalyear']
 
     # Target & Weights
@@ -100,10 +102,10 @@ class DataProcessor:
 
         return df[self.cfg.all_required_cols].copy()
 
-    def preprocess(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Main pipeline: Clean -> Engineer -> Encode -> Scale -> Tensorize."""
+    def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Step 1: Cleaning and Feature Engineering (Stateless)."""
         if df.empty:
-            return {}
+            return df
             
         # 1. Cleaning
         initial_len = len(df)
@@ -113,26 +115,51 @@ class DataProcessor:
         # 2. Feature Engineering
         df['tenure'] = (df['fiscalyear'] - df['ceo_year']).clip(lower=0)
         
-        # 3. Categorical Encoding
-        # Firm
-        self.encoders['compindustry'] = LabelEncoder()
-        df['compindustry_code'] = self.encoders['compindustry'].fit_transform(df['compindustry'].astype(str))
-        
-        # CEO
-        self.encoders['Gender'] = LabelEncoder()
-        df['gender_code'] = self.encoders['Gender'].fit_transform(df['Gender'].astype(str))
-        
-        # Ensure numerical categories are integers
-        df['maxedu'] = df['maxedu'].astype(int)
-        df['ivy'] = df['ivy'].astype(int)
-        
-        # 4. Scaling Numeric Features
-        df[self.final_firm_numeric] = self.scalers['firm'].fit_transform(df[self.final_firm_numeric])
-        df[self.final_ceo_numeric] = self.scalers['ceo'].fit_transform(df[self.final_ceo_numeric])
-        
-        # 5. Weight Calculation
+        # 3. Weight Calculation
         epsilon = 1e-6
         df['weights'] = 1 / (df[self.cfg.WEIGHT_COL]**2 + epsilon)
+        
+        return df
+
+    def fit(self, df: pd.DataFrame):
+        """Step 2: Fit scalers and encoders on training data."""
+        print("Fitting scalers and encoders on training data...")
+        
+        # Categorical Encoding
+        for col in self.cfg.FIRM_CAT_COLS:
+            self.encoders[col] = LabelEncoder()
+            self.encoders[col].fit(df[col].astype(str))
+            
+        for col in self.cfg.CEO_CAT_COLS:
+            self.encoders[col] = LabelEncoder()
+            self.encoders[col].fit(df[col].astype(str))
+        
+        # Scaling Numeric Features
+        self.scalers['firm'].fit(df[self.final_firm_numeric])
+        self.scalers['ceo'].fit(df[self.final_ceo_numeric])
+        
+    def transform(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Step 3: Apply transformations and return tensors."""
+        if df.empty:
+            return {}
+            
+        df = df.copy()
+        
+        # Categorical Encoding (Handle unknown labels safely-ish)
+        def safe_transform(encoder, series):
+            # Map unknown classes to the first class (0) - simple fallback
+            known_classes = set(encoder.classes_)
+            return series.apply(lambda x: encoder.transform([x])[0] if x in known_classes else 0)
+
+        for col in self.cfg.FIRM_CAT_COLS:
+            df[f'{col}_code'] = safe_transform(self.encoders[col], df[col].astype(str))
+            
+        for col in self.cfg.CEO_CAT_COLS:
+            df[f'{col}_code'] = safe_transform(self.encoders[col], df[col].astype(str))
+        
+        # Scaling Numeric Features
+        df[self.final_firm_numeric] = self.scalers['firm'].transform(df[self.final_firm_numeric])
+        df[self.final_ceo_numeric] = self.scalers['ceo'].transform(df[self.final_ceo_numeric])
         
         # Store processed DF for visualization/debugging
         self.processed_df = df
@@ -144,24 +171,24 @@ class DataProcessor:
         # Metadata for Model Initialization
         metadata = {
             'n_firm_numeric': len(self.final_firm_numeric),
-            'n_firm_compindustry': len(self.encoders['compindustry'].classes_),
+            'firm_cat_counts': [len(self.encoders[col].classes_) for col in self.cfg.FIRM_CAT_COLS],
             
             'n_ceo_numeric': len(self.final_ceo_numeric),
-            'n_ceo_gender': len(self.encoders['Gender'].classes_),
-            'n_ceo_maxedu': int(df['maxedu'].max()) + 1,
-            'n_ceo_ivy': int(df['ivy'].max()) + 1,
+            'ceo_cat_counts': [len(self.encoders[col].classes_) for col in self.cfg.CEO_CAT_COLS],
         }
+        
+        # Stack categorical features
+        firm_cat_data = np.stack([df[f'{col}_code'].values for col in self.cfg.FIRM_CAT_COLS], axis=1)
+        ceo_cat_data = np.stack([df[f'{col}_code'].values for col in self.cfg.CEO_CAT_COLS], axis=1)
         
         tensors = {
             # Firm
             'firm_numeric': torch.tensor(df[self.final_firm_numeric].values, dtype=torch.float32),
-            'firm_compindustry': torch.tensor(df['compindustry_code'].values, dtype=torch.long),
+            'firm_cat': torch.tensor(firm_cat_data, dtype=torch.long),
             
             # CEO
             'ceo_numeric': torch.tensor(df[self.final_ceo_numeric].values, dtype=torch.float32),
-            'ceo_gender': torch.tensor(df['gender_code'].values, dtype=torch.long),
-            'ceo_maxedu': torch.tensor(df['maxedu'].values, dtype=torch.long),
-            'ceo_ivy': torch.tensor(df['ivy'].values, dtype=torch.long),
+            'ceo_cat': torch.tensor(ceo_cat_data, dtype=torch.long),
             
             # Target & Weights
             'target': torch.tensor(df[self.cfg.TARGET_COL].values, dtype=torch.float32).view(-1, 1),
@@ -174,10 +201,31 @@ class DataProcessor:
         """Returns a flattened list of feature names in the order used by the model wrapper."""
         return (
             self.final_firm_numeric + 
-            ['compindustry'] + 
+            self.cfg.FIRM_CAT_COLS + 
             self.final_ceo_numeric + 
-            ['Gender', 'maxedu', 'ivy']
+            self.cfg.CEO_CAT_COLS
         )
+
+class CEOFirmDataset(Dataset):
+    """
+    PyTorch Dataset for mini-batch training.
+    """
+    def __init__(self, data_dict: Dict[str, Any]):
+        self.data = data_dict
+        self.length = len(data_dict['target'])
+        
+    def __len__(self):
+        return self.length
+        
+    def __getitem__(self, idx):
+        return {
+            'firm_numeric': self.data['firm_numeric'][idx],
+            'firm_cat': self.data['firm_cat'][idx],
+            'ceo_numeric': self.data['ceo_numeric'][idx],
+            'ceo_cat': self.data['ceo_cat'][idx],
+            'target': self.data['target'][idx],
+            'weights': self.data['weights'][idx]
+        }
 
 # ==========================================
 # 3. MODEL ARCHITECTURE
@@ -191,66 +239,85 @@ class CEOFirmMatcher(nn.Module):
         super(CEOFirmMatcher, self).__init__()
         
         # --- Embeddings ---
-        self.firm_compindustry_emb = nn.Embedding(metadata['n_firm_compindustry'], config.EMBEDDING_DIM_LARGE)
+        # --- Embeddings ---
+        # Firm Embeddings
+        self.firm_embeddings = nn.ModuleList([
+            nn.Embedding(n_classes, config.EMBEDDING_DIM_LARGE)
+            for n_classes in metadata['firm_cat_counts']
+        ])
         
-        self.ceo_gender_emb = nn.Embedding(metadata['n_ceo_gender'], config.EMBEDDING_DIM_MEDIUM)
-        self.ceo_maxedu_emb = nn.Embedding(metadata['n_ceo_maxedu'], config.EMBEDDING_DIM_MEDIUM)
-        self.ceo_ivy_emb = nn.Embedding(metadata['n_ceo_ivy'], config.EMBEDDING_DIM_SMALL)
+        # CEO Embeddings
+        self.ceo_embeddings = nn.ModuleList([
+            nn.Embedding(n_classes, config.EMBEDDING_DIM_MEDIUM)
+            for n_classes in metadata['ceo_cat_counts']
+        ])
         
         # --- TOWER A: FIRM ENCODER ---
-        firm_input_dim = metadata['n_firm_numeric'] + config.EMBEDDING_DIM_LARGE
+        # --- TOWER A: FIRM ENCODER ---
+        firm_input_dim = metadata['n_firm_numeric'] + len(metadata['firm_cat_counts']) * config.EMBEDDING_DIM_LARGE
         self.firm_tower = nn.Sequential(
             nn.Linear(firm_input_dim, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(32, config.LATENT_DIM)
         )
         
         # --- TOWER B: CEO ENCODER ---
-        ceo_input_dim = (metadata['n_ceo_numeric'] + 
-                         config.EMBEDDING_DIM_MEDIUM +  # Gender
-                         config.EMBEDDING_DIM_MEDIUM +  # MaxEdu
-                         config.EMBEDDING_DIM_SMALL)    # Ivy
+        # --- TOWER B: CEO ENCODER ---
+        ceo_input_dim = metadata['n_ceo_numeric'] + len(metadata['ceo_cat_counts']) * config.EMBEDDING_DIM_MEDIUM
                          
         self.ceo_tower = nn.Sequential(
             nn.Linear(ceo_input_dim, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(64, 32),
+            nn.BatchNorm1d(32),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(32, config.LATENT_DIM)
         )
         
-    def forward(self, f_numeric, f_compindustry, c_numeric, c_gender, c_maxedu, c_ivy):
+        # Learnable temperature for cosine similarity scaling
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        
+    def forward(self, f_numeric, f_cat, c_numeric, c_cat):
         # Firm Tower
-        f_emb = self.firm_compindustry_emb(f_compindustry)
-        f_combined = torch.cat([f_numeric, f_emb], dim=1)
+        f_embs = [emb(f_cat[:, i]) for i, emb in enumerate(self.firm_embeddings)]
+        f_combined = torch.cat([f_numeric] + f_embs, dim=1)
         u_firm = self.firm_tower(f_combined)
         
         # CEO Tower
-        c_g_emb = self.ceo_gender_emb(c_gender)
-        c_e_emb = self.ceo_maxedu_emb(c_maxedu)
-        c_i_emb = self.ceo_ivy_emb(c_ivy)
-        c_combined = torch.cat([c_numeric, c_g_emb, c_e_emb, c_i_emb], dim=1)
+        c_embs = [emb(c_cat[:, i]) for i, emb in enumerate(self.ceo_embeddings)]
+        c_combined = torch.cat([c_numeric] + c_embs, dim=1)
         v_ceo = self.ceo_tower(c_combined)
         
-        # Match Score (Dot Product)
-        match_score = (u_firm * v_ceo).sum(dim=1, keepdim=True)
+        # L2 Normalization
+        u_firm = u_firm / u_firm.norm(dim=1, keepdim=True)
+        v_ceo = v_ceo / v_ceo.norm(dim=1, keepdim=True)
+        
+        # Match Score (Scaled Dot Product)
+        # We use a learnable scale because match_means are not bounded to [-1, 1]
+        # Actually, match_means are N(0,1), so they can be > 1. 
+        # Standard cosine sim is [-1, 1]. We need to scale it.
+        logit_scale = self.logit_scale.exp()
+        match_score = (u_firm * v_ceo).sum(dim=1, keepdim=True) * logit_scale
+        
         return match_score
 
 # ==========================================
 # 4. TRAINING ENGINE
 # ==========================================
-def train_model(data: Dict[str, Any], config: Config) -> Optional[CEOFirmMatcher]:
-    if not data:
-        return None
-
-    # Initialize Model
-    model = CEOFirmMatcher(data, config).to(config.DEVICE)
+def train_model(train_loader: DataLoader, val_loader: DataLoader, 
+                metadata: Dict[str, int], config: Config) -> Optional[CEOFirmMatcher]:
     
-    # Move Tensors to Device
-    tensor_keys = [k for k in data.keys() if isinstance(data[k], torch.Tensor)]
-    model_data = {k: data[k].to(config.DEVICE) for k in tensor_keys}
+    # Initialize Model
+    model = CEOFirmMatcher(metadata, config).to(config.DEVICE)
     
     optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
     
@@ -258,22 +325,31 @@ def train_model(data: Dict[str, Any], config: Config) -> Optional[CEOFirmMatcher
     
     for epoch in range(config.EPOCHS):
         model.train()
-        optimizer.zero_grad()
+        total_loss = 0
         
-        preds = model(
-            model_data['firm_numeric'], model_data['firm_compindustry'],
-            model_data['ceo_numeric'], model_data['ceo_gender'], 
-            model_data['ceo_maxedu'], model_data['ceo_ivy']
-        )
-        
-        # Weighted MSE Loss
-        loss = (model_data['weights'] * (preds - model_data['target'])**2).mean()
-        
-        loss.backward()
-        optimizer.step()
+        for batch in train_loader:
+            # Move batch to device
+            batch = {k: v.to(config.DEVICE) for k, v in batch.items()}
+            
+            optimizer.zero_grad()
+            
+            preds = model(
+                batch['firm_numeric'], batch['firm_cat'],
+                batch['ceo_numeric'], batch['ceo_cat']
+            )
+            
+            # Weighted MSE Loss
+            loss = (batch['weights'] * (preds - batch['target'])**2).mean()
+            
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+        avg_loss = total_loss / len(train_loader)
         
         if epoch % 5 == 0:
-            print(f"Epoch {epoch}: Weighted MSE Loss = {loss.item():.4f}")
+            print(f"Epoch {epoch}: Avg Train Loss = {avg_loss:.4f}")
             
     return model
 
@@ -296,15 +372,15 @@ class ModelWrapper:
         
         # Calculate indices for slicing the flattened input
         self.n_firm_num = len(processor.final_firm_numeric)
+        self.n_firm_cat = len(processor.cfg.FIRM_CAT_COLS)
         self.n_ceo_num = len(processor.final_ceo_numeric)
+        self.n_ceo_cat = len(processor.cfg.CEO_CAT_COLS)
         
         # Slice Ranges
         self.idx_firm_num_end = self.n_firm_num
-        self.idx_firm_cat_end = self.idx_firm_num_end + 1
+        self.idx_firm_cat_end = self.idx_firm_num_end + self.n_firm_cat
         self.idx_ceo_num_end = self.idx_firm_cat_end + self.n_ceo_num
-        self.idx_gender_end = self.idx_ceo_num_end + 1
-        self.idx_maxedu_end = self.idx_gender_end + 1
-        # Ivy is the rest
+        self.idx_ceo_cat_end = self.idx_ceo_num_end + self.n_ceo_cat
         
     def predict(self, X: np.ndarray) -> np.ndarray:
         self.model.eval()
@@ -315,22 +391,16 @@ class ModelWrapper:
         f_num = X_tensor[:, :self.idx_firm_num_end]
         
         # 2. Firm Cat (Long)
-        f_cat = X_tensor[:, self.idx_firm_num_end:self.idx_firm_cat_end].long().squeeze(1)
+        f_cat = X_tensor[:, self.idx_firm_num_end:self.idx_firm_cat_end].long()
         
         # 3. CEO Numeric
         c_num = X_tensor[:, self.idx_firm_cat_end:self.idx_ceo_num_end]
         
-        # 4. CEO Gender (Long)
-        c_gen = X_tensor[:, self.idx_ceo_num_end:self.idx_gender_end].long().squeeze(1)
-        
-        # 5. CEO MaxEdu (Long)
-        c_edu = X_tensor[:, self.idx_gender_end:self.idx_maxedu_end].long().squeeze(1)
-        
-        # 6. CEO Ivy (Long)
-        c_ivy = X_tensor[:, self.idx_maxedu_end:].long().squeeze(1)
+        # 4. CEO Cat (Long)
+        c_cat = X_tensor[:, self.idx_ceo_num_end:].long()
         
         with torch.no_grad():
-            preds = self.model(f_num, f_cat, c_num, c_gen, c_edu, c_ivy)
+            preds = self.model(f_num, f_cat, c_num, c_cat)
             
         return preds.cpu().numpy().flatten()
 
@@ -343,17 +413,17 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
     # Fortunately, processor._to_tensors gives us the components, we just need to concat them numpy-style
     
     # We can use the raw df, process it again to get arrays (cleaner)
-    data_dict = wrapper.processor._to_tensors(df)
+    data_dict = wrapper.processor.transform(df)
     
-    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOGen, CEOEdu, CEOIvy
+    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOGen, CEOEdu, CEOIvy, CEOMover, CEOOutExp
+    # Note: Tensors are on CPU by default in _to_tensors
+    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOCat
     # Note: Tensors are on CPU by default in _to_tensors
     X_flat = np.hstack([
         data_dict['firm_numeric'].numpy(),
-        data_dict['firm_compindustry'].numpy().reshape(-1, 1),
+        data_dict['firm_cat'].numpy(),
         data_dict['ceo_numeric'].numpy(),
-        data_dict['ceo_gender'].numpy().reshape(-1, 1),
-        data_dict['ceo_maxedu'].numpy().reshape(-1, 1),
-        data_dict['ceo_ivy'].numpy().reshape(-1, 1)
+        data_dict['ceo_cat'].numpy()
     ])
     
     feature_names = wrapper.processor.get_feature_names()
@@ -405,9 +475,11 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
         ax.grid(True, alpha=0.3)
         
     plt.tight_layout()
-    os.makedirs("Output", exist_ok=True)
-    plt.savefig("Output/pdp_plots.svg")
-    print("Saved PDP plots to Output/pdp_plots.svg")
+    output_dir = wrapper.processor.cfg.OUTPUT_PATH
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "pdp_plots.svg")
+    plt.savefig(save_path)
+    print(f"Saved PDP plots to {save_path}")
     plt.close()
 
 def explain_model_shap(wrapper: ModelWrapper, df: pd.DataFrame):
@@ -416,13 +488,13 @@ def explain_model_shap(wrapper: ModelWrapper, df: pd.DataFrame):
     
     # 1. Prepare Data
     data_dict = wrapper.processor._to_tensors(df)
+    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOCat
+    # Note: Tensors are on CPU by default in _to_tensors
     X_flat = np.hstack([
         data_dict['firm_numeric'].numpy(),
-        data_dict['firm_compindustry'].numpy().reshape(-1, 1),
+        data_dict['firm_cat'].numpy(),
         data_dict['ceo_numeric'].numpy(),
-        data_dict['ceo_gender'].numpy().reshape(-1, 1),
-        data_dict['ceo_maxedu'].numpy().reshape(-1, 1),
-        data_dict['ceo_ivy'].numpy().reshape(-1, 1)
+        data_dict['ceo_cat'].numpy()
     ])
     feature_names = wrapper.processor.get_feature_names()
     
@@ -445,9 +517,11 @@ def explain_model_shap(wrapper: ModelWrapper, df: pd.DataFrame):
     shap.summary_plot(shap_values, X_subset, feature_names=feature_names, show=False)
     plt.title("SHAP Feature Importance")
     plt.tight_layout()
-    os.makedirs("Output", exist_ok=True)
-    plt.savefig("Output/shap_summary.svg")
-    print("Saved SHAP summary to Output/shap_summary.svg")
+    output_dir = wrapper.processor.cfg.OUTPUT_PATH
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "shap_summary.svg")
+    plt.savefig(save_path)
+    print(f"Saved SHAP summary to {save_path}")
     plt.close()
 
 # ==========================================
@@ -473,10 +547,14 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
         elif name in processor.final_ceo_numeric:
             idx = list(processor.scalers['ceo'].feature_names_in_).index(name)
             return 'ceo_numeric', idx
-        elif name == 'ivy':
-            return 'ceo_ivy', 0
+        elif name in processor.cfg.FIRM_CAT_COLS:
+            idx = processor.cfg.FIRM_CAT_COLS.index(name)
+            return 'firm_cat', idx
+        elif name in processor.cfg.CEO_CAT_COLS:
+            idx = processor.cfg.CEO_CAT_COLS.index(name)
+            return 'ceo_cat', idx
         else:
-            raise ValueError(f"Feature {name} not supported for heatmap (must be numeric or 'ivy').")
+            raise ValueError(f"Feature {name} not supported for heatmap.")
 
     try:
         x_type, x_idx = get_feature_info(x_feature)
@@ -487,8 +565,18 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
 
     # Define Grid Range
     def get_range(feat_type, feat_idx):
-        if feat_type == 'ceo_ivy':
-            return np.array([0, 1])
+        if feat_type in ['firm_cat', 'ceo_cat']:
+             # Get number of classes for this categorical feature
+             if feat_type == 'firm_cat':
+                 col_name = processor.cfg.FIRM_CAT_COLS[feat_idx]
+             else:
+                 col_name = processor.cfg.CEO_CAT_COLS[feat_idx]
+             
+             n_classes = len(processor.encoders[col_name].classes_)
+             # If too many classes, just show first 10 or so? 
+             # For interaction plots, usually we want all or a specific subset.
+             # Assuming small cardinality for now as per original code (ivy, gender, etc)
+             return np.arange(n_classes)
         else:
             return np.linspace(device_data[feat_type][:, feat_idx].min().item(), 
                                device_data[feat_type][:, feat_idx].max().item(), 50)
@@ -505,13 +593,11 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
     def calculate_mode(tensor):
         """Helper to calculate mode, handling MPS limitations."""
         if tensor.device.type == 'mps':
-            return torch.mode(tensor.cpu())[0].to(tensor.device).view(1)
-        return torch.mode(tensor)[0].view(1)
+            return torch.mode(tensor.cpu(), dim=0)[0].to(tensor.device).view(1, -1)
+        return torch.mode(tensor, dim=0)[0].view(1, -1)
 
-    mode_compindustry = calculate_mode(device_data['firm_compindustry'])
-    mode_gender = calculate_mode(device_data['ceo_gender'])
-    mode_maxedu = calculate_mode(device_data['ceo_maxedu'])
-    mode_ivy = calculate_mode(device_data['ceo_ivy'])
+    mode_firm_cat = calculate_mode(device_data['firm_cat'])
+    mode_ceo_cat = calculate_mode(device_data['ceo_cat'])
     
     model.eval()
     with torch.no_grad():
@@ -520,41 +606,38 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
                 # Reset inputs to baseline
                 f_in = avg_f_numeric.clone()
                 c_in = avg_c_numeric.clone()
-                c_ivy_in = mode_ivy.clone()
+                f_cat_in = mode_firm_cat.clone()
+                c_cat_in = mode_ceo_cat.clone()
                 
-                # Update X feature
-                if x_type == 'firm_numeric':
-                    f_in[:, x_idx] = float(x_val)
-                elif x_type == 'ceo_numeric':
-                    c_in[:, x_idx] = float(x_val)
-                elif x_type == 'ceo_ivy':
-                    c_ivy_in[0] = int(x_val)
-                    
-                # Update Y feature
-                if y_type == 'firm_numeric':
-                    f_in[:, y_idx] = float(y_val)
-                elif y_type == 'ceo_numeric':
-                    c_in[:, y_idx] = float(y_val)
-                elif y_type == 'ceo_ivy':
-                    c_ivy_in[0] = int(y_val)
+                def update_input(ftype, fidx, val):
+                    if ftype == 'firm_numeric':
+                        f_in[:, fidx] = float(val)
+                    elif ftype == 'ceo_numeric':
+                        c_in[:, fidx] = float(val)
+                    elif ftype == 'firm_cat':
+                        f_cat_in[:, fidx] = int(val)
+                    elif ftype == 'ceo_cat':
+                        c_cat_in[:, fidx] = int(val)
+
+                update_input(x_type, x_idx, x_val)
+                update_input(y_type, y_idx, y_val)
                 
-                score = model(
-                    f_in, mode_compindustry,
-                    c_in, mode_gender, mode_maxedu, c_ivy_in
-                )
+                score = model(f_in, f_cat_in, c_in, c_cat_in)
                 heatmap[i, j] = score.item()
 
     # Plotting
     plt.figure(figsize=(10, 6))
-    plt.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower',
+    # Added interpolation='bicubic' for smoothing as requested
+    plt.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower', interpolation='bicubic',
                extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()])
     plt.colorbar(label='Predicted Match Quality')
     plt.xlabel(f'{x_feature} (Standardized)')
     plt.ylabel(f'{y_feature} (Standardized)')
     plt.title(f'Interaction: {x_feature} vs {y_feature}')
     
-    os.makedirs("Output", exist_ok=True)
-    path = os.path.join("Output", filename)
+    output_dir = processor.cfg.OUTPUT_PATH
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
     plt.savefig(path)
     print(f"Saved heatmap to {path}")
     plt.close()
@@ -580,34 +663,68 @@ if __name__ == "__main__":
     else:
         raw_df = processor.load_data()
         
-    processed_data = processor.preprocess(raw_df)
-    
-    # 2. Training
-    if processed_data:
-        trained_model = train_model(processed_data, config)
+    if not raw_df.empty:
+        # Step 1: Prepare Features (Stateless)
+        df_clean = processor.prepare_features(raw_df)
+        
+        # Step 2: Split Data
+        train_df, val_df = train_test_split(df_clean, test_size=0.2, random_state=42)
+        print(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
+        
+        # Step 3: Fit Scalers on Train
+        processor.fit(train_df)
+        
+        # Step 4: Transform
+        train_data = processor.transform(train_df)
+        val_data = processor.transform(val_df)
+        
+        # Step 5: Create Datasets & Loaders
+        train_dataset = CEOFirmDataset(train_data)
+        val_dataset = CEOFirmDataset(val_data)
+        
+        train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
+        
+        # Metadata from train_data (assuming consistent schema)
+        # We need to extract metadata from the dictionary returned by transform
+        # But transform returns {**tensors, **metadata}.
+        # So we can just use train_data as metadata source.
+        
+        # 2. Training
+        trained_model = train_model(train_loader, val_loader, train_data, config)
         
         if trained_model:
             # 4. Explainability
+            # For explainability, we can use the validation set or the full set (transformed)
+            # Let's use validation set for speed and correctness (unseen data)
             wrapper = ModelWrapper(trained_model, processor)
             
             # PDP for key features
-            explain_model_pdp(wrapper, processor.processed_df, 
-                              ['logat', 'Age', 'tenure', 'exp_roa', 'non_competition_score', 
-                               'Output', 'Throghput', 'Peripheral',
-                               'boardindpw', 'boardsizew', 'busyw', 'pct_blockw',
-                               'rdintw', 'capintw', 'ind_firms_60'])
+            # We need to pass a DataFrame to explain_model_pdp, which then calls _to_tensors.
+            # But _to_tensors relies on fitted scalers, which is fine (processor is stateful now).
+            features_to_plot = config.FIRM_NUMERIC_COLS + config.CEO_NUMERIC_COLS + ['tenure']
+            explain_model_pdp(wrapper, val_df, features_to_plot)
             
             # SHAP
-            train_df, val_df = train_test_split(processor.processed_df, test_size=0.2)
             # explain_model_shap(wrapper, val_df)
 
             # 3. Interaction Plots
-            plot_interaction_heatmap(trained_model, processor, 'logat', 'Age', 'heatmap_size_age.svg')
-            plot_interaction_heatmap(trained_model, processor, 'logat', 'Output', 'heatmap_size_skill.svg')
+            # We need to ensure processor.processed_df is set or passed correctly.
+            # processor.transform sets self.processed_df.
+            # Let's ensure it's set to something useful for the heatmap (e.g. val_df)
+            processor.transform(val_df) 
+            
+            plot_interaction_heatmap(trained_model, processor, 'logatw', 'Age', 'heatmap_size_age.svg')
+            plot_interaction_heatmap(trained_model, processor, 'logatw', 'Output', 'heatmap_size_skill.svg')
             plot_interaction_heatmap(trained_model, processor, 'exp_roa', 'tenure', 'heatmap_perf_exp.svg')
             
             # New Heatmaps
             plot_interaction_heatmap(trained_model, processor, 'rdintw', 'Output', 'heatmap_rd_skill.svg')
             plot_interaction_heatmap(trained_model, processor, 'rdintw', 'Age', 'heatmap_rd_age.svg')
-            plot_interaction_heatmap(trained_model, processor, 'logat', 'ivy', 'heatmap_size_ivy.svg')
+            plot_interaction_heatmap(trained_model, processor, 'logatw', 'ivy', 'heatmap_size_ivy.svg')
             plot_interaction_heatmap(trained_model, processor, 'tenure', 'boardindpw', 'heatmap_tenure_boardind.svg')
+            
+            plot_interaction_heatmap(trained_model, processor, 'maxedu', 'rdintw', 'heatmap_maxedu_rd.svg')
+            plot_interaction_heatmap(trained_model, processor, 'maxedu', 'capintw', 'heatmap_maxedu_capx.svg')
+            plot_interaction_heatmap(trained_model, processor, 'logatw', 'm', 'heatmap_size_mover.svg')
+            plot_interaction_heatmap(trained_model, processor, 'leverage', 'Age', 'heatmap_leverage_age.svg')
