@@ -1,11 +1,11 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="ceo_firm_matching",
     version="0.1.0",
     description="Two Tower Recommender System for CEO-Firm Matching",
     author="Gemini Agent",
-    py_modules=["two_towers"],
+    packages=find_packages(),
     install_requires=[
         "torch",
         "pandas",
@@ -14,5 +14,10 @@ setup(
         "scikit-learn",
         "shap"
     ],
+    entry_points={
+        'console_scripts': [
+            'ceo-firm-match=ceo_firm_matching.cli:main',
+        ],
+    },
     python_requires=">=3.8",
 )

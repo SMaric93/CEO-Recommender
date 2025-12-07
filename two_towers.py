@@ -205,6 +205,28 @@ class DataProcessor:
             self.final_ceo_numeric + 
             self.cfg.CEO_CAT_COLS
         )
+    
+    def get_flat_features(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Transforms a DataFrame and returns a flattened numpy array of features.
+        
+        Layout: [Firm Numeric] [Firm Cat] [CEO Numeric] [CEO Cat]
+        
+        This is useful for explainability tools (SHAP, PDP) that expect a 2D array.
+        
+        Args:
+            df: DataFrame with required columns (will be transformed using fitted scalers/encoders)
+            
+        Returns:
+            2D numpy array of shape (n_samples, n_features)
+        """
+        data_dict = self.transform(df)
+        return np.hstack([
+            data_dict['firm_numeric'].numpy(),
+            data_dict['firm_cat'].numpy(),
+            data_dict['ceo_numeric'].numpy(),
+            data_dict['ceo_cat'].numpy()
+        ])
 
 class CEOFirmDataset(Dataset):
     """
@@ -239,7 +261,6 @@ class CEOFirmMatcher(nn.Module):
         super(CEOFirmMatcher, self).__init__()
         
         # --- Embeddings ---
-        # --- Embeddings ---
         # Firm Embeddings
         self.firm_embeddings = nn.ModuleList([
             nn.Embedding(n_classes, config.EMBEDDING_DIM_LARGE)
@@ -252,7 +273,6 @@ class CEOFirmMatcher(nn.Module):
             for n_classes in metadata['ceo_cat_counts']
         ])
         
-        # --- TOWER A: FIRM ENCODER ---
         # --- TOWER A: FIRM ENCODER ---
         firm_input_dim = metadata['n_firm_numeric'] + len(metadata['firm_cat_counts']) * config.EMBEDDING_DIM_LARGE
         self.firm_tower = nn.Sequential(
@@ -267,7 +287,6 @@ class CEOFirmMatcher(nn.Module):
             nn.Linear(32, config.LATENT_DIM)
         )
         
-        # --- TOWER B: CEO ENCODER ---
         # --- TOWER B: CEO ENCODER ---
         ceo_input_dim = metadata['n_ceo_numeric'] + len(metadata['ceo_cat_counts']) * config.EMBEDDING_DIM_MEDIUM
                          
@@ -405,26 +424,17 @@ class ModelWrapper:
         return preds.cpu().numpy().flatten()
 
 def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot: List[str]):
-    """Generates Partial Dependence Plots for specified features."""
+    """Generates Partial Dependence Plots for specified features.
+    
+    Args:
+        wrapper: ModelWrapper instance with trained model
+        df: DataFrame to use for computing PDPs  
+        features_to_plot: List of feature names to generate plots for
+    """
     print("\nGenerating Partial Dependence Plots (PDP)...")
     
-    # Prepare Data Matrix
-    # We need to construct the flattened matrix that ModelWrapper expects from the processed DF
-    # Fortunately, processor._to_tensors gives us the components, we just need to concat them numpy-style
-    
-    # We can use the raw df, process it again to get arrays (cleaner)
-    data_dict = wrapper.processor.transform(df)
-    
-    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOGen, CEOEdu, CEOIvy, CEOMover, CEOOutExp
-    # Note: Tensors are on CPU by default in _to_tensors
-    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOCat
-    # Note: Tensors are on CPU by default in _to_tensors
-    X_flat = np.hstack([
-        data_dict['firm_numeric'].numpy(),
-        data_dict['firm_cat'].numpy(),
-        data_dict['ceo_numeric'].numpy(),
-        data_dict['ceo_cat'].numpy()
-    ])
+    # Use helper to get flattened feature matrix
+    X_flat = wrapper.processor.get_flat_features(df)
     
     feature_names = wrapper.processor.get_feature_names()
     
@@ -483,19 +493,16 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
     plt.close()
 
 def explain_model_shap(wrapper: ModelWrapper, df: pd.DataFrame):
-    """Generates SHAP summary plot."""
+    """Generates SHAP summary plot for feature importance analysis.
+    
+    Args:
+        wrapper: ModelWrapper instance with trained model
+        df: DataFrame to use for SHAP analysis
+    """
     print("\nCalculating SHAP values (this may take a moment)...")
     
-    # 1. Prepare Data
-    data_dict = wrapper.processor._to_tensors(df)
-    # Concatenate in order: FirmNum, FirmCat, CEONum, CEOCat
-    # Note: Tensors are on CPU by default in _to_tensors
-    X_flat = np.hstack([
-        data_dict['firm_numeric'].numpy(),
-        data_dict['firm_cat'].numpy(),
-        data_dict['ceo_numeric'].numpy(),
-        data_dict['ceo_cat'].numpy()
-    ])
+    # Use helper to get flattened feature matrix
+    X_flat = wrapper.processor.get_flat_features(df)
     feature_names = wrapper.processor.get_feature_names()
     
     # 2. Background Data (Summary) for KernelExplainer
