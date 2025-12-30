@@ -73,3 +73,40 @@ def generate_synthetic_data(n_samples: int = 1000) -> pd.DataFrame:
     }
     
     return pd.DataFrame(data)
+
+
+def generate_structural_synthetic_data(n_samples: int = 2000, seed: int = 42) -> pd.DataFrame:
+    """
+    Generates a synthetic DataFrame for the Structural Distillation Network.
+    
+    Extends the base synthetic data with BLM posterior probability columns
+    (prob_ceo_1..5 and prob_firm_1..5) using Dirichlet distributions.
+    
+    Args:
+        n_samples: Number of samples to generate
+        seed: Random seed for reproducibility
+        
+    Returns:
+        DataFrame with synthetic data including BLM probability columns
+    """
+    np.random.seed(seed)
+    
+    # Start with base synthetic data
+    df = generate_synthetic_data(n_samples)
+    
+    # Generate CEO type probabilities using Dirichlet distribution
+    # This ensures probabilities sum to 1 for each observation
+    ceo_probs = np.random.dirichlet(np.ones(5), n_samples)
+    for i in range(5):
+        df[f'prob_ceo_{i+1}'] = ceo_probs[:, i]
+    
+    # Generate Firm class probabilities using Dirichlet distribution
+    firm_probs = np.random.dirichlet(np.ones(5), n_samples)
+    for i in range(5):
+        df[f'prob_firm_{i+1}'] = firm_probs[:, i]
+    
+    # Derive tenure from fiscalyear and ceo_year
+    df['tenure'] = (df['fiscalyear'] - df['ceo_year']).clip(lower=0)
+    
+    return df
+

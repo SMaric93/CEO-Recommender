@@ -67,3 +67,83 @@ The script is non-interactive and saves results to `Output/`:
 *   **Configuration:** All constants (hyperparameters, column names) are grouped in the `Config` class. **Modify this class to change model behavior.**
 *   **State Management:** `DataProcessor` encapsulates encoders and scalers to ensure consistency between training and inference (or analysis).
 *   **Hardware Acceleration:** The code checks for `mps` (Apple Silicon) and `cuda` (NVIDIA) availability automatically.
+
+---
+
+# Structural Distillation Network
+
+## Overview
+A second model architecture that distills BLM (Bonhomme-Lamadon-Manresa) econometric estimates into a neural network. Unlike the Two Tower model which predicts `match_means` directly, this model:
+
+1. **Predicts Type Probabilities:** Learns to classify CEOs into 5 types and Firms into 5 classes
+2. **Uses Frozen Interaction Matrix:** The BLM-estimated 5×5 interaction matrix is frozen (not learned)
+3. **Computes Expected Match:** Match value = P(CEO type) × A × P(Firm class)
+
+## Architecture
+```
+Observables → [CEO Tower] → P(CEO Type | X)
+                                    ↓
+                              A (Frozen BLM Matrix)
+                                    ↓
+Observables → [Firm Tower] → P(Firm Class | X)
+                                    ↓
+                            Expected Match Value
+```
+
+## Key Modules
+
+| Module | Description |
+|--------|-------------|
+| `structural_config.py` | `StructuralConfig` dataclass with BLM priors |
+| `structural_data.py` | `StructuralDataProcessor` for probability targets |
+| `structural_model.py` | `StructuralDistillationNet` with frozen interaction matrix |
+| `structural_training.py` | KL divergence training loop |
+| `structural_explain.py` | `IlluminationEngine` for gradient sensitivity analysis |
+| `structural_cli.py` | Command-line interface |
+
+## Usage
+
+### Running the Model
+*   **With Real Data:**
+    ```bash
+    python structural_distillation_network.py
+    ```
+    *Requires `Data/blm_posteriors.csv` with probability columns.*
+
+*   **With Synthetic Data:**
+    ```bash
+    python structural_distillation_network.py --synthetic
+    ```
+
+*   **Using Package CLI:**
+    ```bash
+    python -m ceo_firm_matching.structural_cli --synthetic --epochs 100
+    ```
+
+## Data Requirements
+The Structural Distillation Network requires BLM posterior probabilities:
+
+*   **CEO Probability Columns:** `prob_ceo_1`, `prob_ceo_2`, ..., `prob_ceo_5`
+*   **Firm Probability Columns:** `prob_firm_1`, `prob_firm_2`, ..., `prob_firm_5`
+*   **Observable Features:** Same as Two Tower model (Age, tenure, firm financials, etc.)
+
+## Outputs
+Results are saved to `Output/Structural_Distillation/`:
+*   `interaction_matrix.png` - Visualization of frozen BLM A matrix
+*   `match_drivers.png` - Gradient sensitivity bar chart
+*   `sensitivity_analysis.csv` - Full sensitivity results
+*   `type_distributions.csv` - CEO/Firm type probability statistics
+
+## BLM Interaction Matrix
+The default 5×5 matrix can be updated in `StructuralConfig.BLM_INTERACTION_MATRIX`:
+```python
+# Example: Replace with Table 3 estimates from BLM paper
+BLM_INTERACTION_MATRIX = [
+    [-0.5, -0.3,  0.0,  0.1,  0.2],  # CEO Type 1
+    [-0.2, -0.1,  0.1,  0.3,  0.4],  # CEO Type 2
+    [ 0.0,  0.2,  0.4,  0.6,  0.7],  # CEO Type 3
+    [ 0.1,  0.4,  0.7,  0.9,  1.1],  # CEO Type 4
+    [ 0.3,  0.6,  0.9,  1.2,  1.5],  # CEO Type 5 (Star)
+]
+```
+

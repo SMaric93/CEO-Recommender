@@ -1,36 +1,110 @@
-# CEO Recommender
+# CEO-Firm Matching
 
-A Two Tower Recommender System for CEO-firm matching.
+A neural network recommendation system for CEO-Firm matching, featuring two model architectures:
 
-## Overview
+1. **Two Tower Model** - Embedding-based similarity matching
+2. **Structural Distillation Network** - BLM econometric prior integration
 
-This project implements a Two Tower neural network architecture for building a recommender system. The Two Tower model is a deep learning approach that separately encodes query (user) and candidate (item) features into embedding spaces, then computes similarity scores between them.
+## Installation
 
-## Two Tower Architecture
+```bash
+# Clone and setup
+cd "Two Towers Implementation"
+./setup_env.sh
 
-The Two Tower model consists of:
+# Or manual setup
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-1. **Query Tower**: Encodes firm/context features into dense embeddings
-2. **Candidate Tower**: Encodes CEO features into dense embeddings
-3. **Similarity Layer**: Computes dot product or cosine similarity between the two towers
+## Quick Start
 
-This architecture enables efficient retrieval by pre-computing candidate embeddings and performing approximate nearest neighbor search at inference time.
+### Two Tower Model
 
-## Features
+```bash
+# With real data
+python -m ceo_firm_matching.cli
 
-- Separate neural networks for query and candidate encoding
-- Efficient candidate retrieval using embedding similarity
-- Scalable architecture for large-scale recommendation tasks
+# With synthetic data
+python -m ceo_firm_matching.cli --synthetic
+```
 
-## Getting Started
+### Structural Distillation Network
 
-(Add installation and usage instructions here)
+```bash
+# With synthetic data
+python structural_distillation_network.py --synthetic
 
-## References
+# With options
+python -m ceo_firm_matching.structural_cli --synthetic --epochs 100 --batch-size 128
+```
 
-- Based on the Two Tower architecture commonly used in industrial recommendation systems
-- Implements principles from modern deep learning-based information retrieval
+## Architecture
+
+### Two Tower Model
+
+```
+Firm Features → [Firm Tower] → Firm Embedding
+                                     ↓
+                              Cosine Similarity → Match Score
+                                     ↑
+CEO Features  → [CEO Tower]  → CEO Embedding
+```
+
+### Structural Distillation Network
+
+```
+Firm Features → [Firm Tower] → P(Firm Class)
+                                     ↓
+                              A (Frozen BLM Matrix)
+                                     ↓
+CEO Features  → [CEO Tower]  → P(CEO Type)
+                                     ↓
+                            Expected Match Value
+```
+
+## Package Structure
+
+```
+ceo_firm_matching/
+├── config.py              # Two Tower configuration
+├── data.py                # Data processing
+├── model.py               # CEOFirmMatcher
+├── training.py            # Training loop
+├── explain.py             # SHAP/PDP explainability
+├── visualization.py       # Interaction heatmaps
+├── cli.py                 # Two Tower CLI
+├── structural_config.py   # BLM priors configuration
+├── structural_data.py     # Probability target processing
+├── structural_model.py    # StructuralDistillationNet
+├── structural_training.py # KL divergence training
+├── structural_explain.py  # Gradient sensitivity
+├── structural_visualization.py # Type distribution plots
+└── structural_cli.py      # Structural CLI
+```
+
+## Data Requirements
+
+### Two Tower Model
+- `Data/ceo_types_v0.2.csv` with `match_means` target
+
+### Structural Distillation
+- `Data/blm_posteriors.csv` with `prob_ceo_1..5` and `prob_firm_1..5`
+
+## Outputs
+
+Results saved to `Output/`:
+- **Two Tower**: `heatmap_*.svg`, `pdp_plots.svg`, `shap_summary.svg`
+- **Structural**: `interaction_matrix.png`, `match_drivers.png`, `type_distributions.csv`
+
+## Testing
+
+```bash
+pytest tests/ -v
+```
 
 ## License
 
-(Add license information)
+MIT
+
