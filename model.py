@@ -13,7 +13,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from typing import Dict, Optional
 
-from config import Config
+from ceo_firm_matching.config import Config
 from data_processing import DataProcessor
 
 __all__ = ['CEOFirmMatcher', 'ModelWrapper', 'train_model']

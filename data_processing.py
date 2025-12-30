@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from typing import Dict, Any, List, Optional
 
-from config import Config
+from ceo_firm_matching.config import Config
 
 __all__ = ['DataProcessor', 'CEOFirmDataset']
 

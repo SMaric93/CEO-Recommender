@@ -31,10 +31,10 @@ class Config:
     OUTPUT_PATH = "/Users/smaric/Papers/Complementarities/Data/BLM Replication Final/Two Towers Implementation/Output"
     
     # Hyperparameters
-    EPOCHS = 40
-    LEARNING_RATE = 0.0004
-    LATENT_DIM = 60
-    BATCH_SIZE = 256
+    EPOCHS = 20
+    LEARNING_RATE = 0.0005
+    LATENT_DIM = 40
+    BATCH_SIZE = 128
     
     # Embedding Dimensions
     EMBEDDING_DIM_SMALL = 2

@@ -14,7 +14,7 @@ import shap
 import torch
 from typing import List
 
-from config import Config
+from ceo_firm_matching.config import Config
 from data_processing import DataProcessor
 from model import CEOFirmMatcher, ModelWrapper
 
@@ -49,6 +49,9 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
     if not indices_to_plot:
         return
 
+    # Determine which features are categorical
+    all_cat_cols = set(wrapper.processor.cfg.FIRM_CAT_COLS + wrapper.processor.cfg.CEO_CAT_COLS)
+    
     # Manual PDP Loop
     fig, axes = plt.subplots(1, len(indices_to_plot), figsize=(5 * len(indices_to_plot), 4))
     if len(indices_to_plot) == 1:
@@ -56,7 +59,13 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
         
     for ax, idx, name in zip(axes, indices_to_plot, valid_names):
         vals = X_flat[:, idx]
-        grid = np.linspace(vals.min(), vals.max(), 50)
+        is_categorical = name in all_cat_cols
+        
+        # Use discrete unique values for categorical, continuous grid otherwise
+        if is_categorical:
+            grid = np.sort(np.unique(vals.astype(int)))
+        else:
+            grid = np.linspace(vals.min(), vals.max(), 50)
         
         pdp_y = []
         sample_indices = np.random.choice(X_flat.shape[0], min(1000, X_flat.shape[0]), replace=False)
@@ -67,12 +76,19 @@ def explain_model_pdp(wrapper: ModelWrapper, df: pd.DataFrame, features_to_plot:
             X_temp[:, idx] = val
             preds = wrapper.predict(X_temp)
             pdp_y.append(np.mean(preds))
+        
+        # Bar plot for categorical, line plot for continuous
+        if is_categorical:
+            ax.bar(grid, pdp_y, color='steelblue', edgecolor='black', alpha=0.8)
+            ax.set_xticks(grid)
+            ax.set_xlabel("Category Code")
+        else:
+            ax.plot(grid, pdp_y, color='blue')
+            ax.set_xlabel("Standardized Value")
             
-        ax.plot(grid, pdp_y, color='blue')
         ax.set_title(f"PDP: {name}")
-        ax.set_xlabel("Standardized Value / Code")
         ax.set_ylabel("Avg Match Score")
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, axis='y')
         
     plt.tight_layout()
     output_dir = wrapper.processor.cfg.OUTPUT_PATH

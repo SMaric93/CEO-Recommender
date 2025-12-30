@@ -10,7 +10,7 @@ import argparse
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from config import Config
+from ceo_firm_matching.config import Config
 from data_processing import DataProcessor, CEOFirmDataset
 from model import CEOFirmMatcher, ModelWrapper, train_model
 from visualization import explain_model_pdp, plot_interaction_heatmap
