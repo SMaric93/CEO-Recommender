@@ -240,14 +240,52 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
                 score = model(f_in, f_cat_in, c_in, c_cat_in)
                 heatmap[i, j] = score.item()
 
-    # Plotting
-    plt.figure(figsize=(10, 6))
-    plt.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower', interpolation='bicubic',
-               extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()])
-    plt.colorbar(label='Predicted Match Quality')
-    plt.xlabel(f'{x_feature} (Standardized)')
-    plt.ylabel(f'{y_feature} (Standardized)')
-    plt.title(f'Interaction: {x_feature} vs {y_feature}')
+    # Determine if axes are categorical
+    x_is_cat = x_type in ['firm_cat', 'ceo_cat']
+    y_is_cat = y_type in ['firm_cat', 'ceo_cat']
+    
+    # Plotting - use different rendering based on axis types
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Choose interpolation based on whether we have categorical axes
+    if x_is_cat or y_is_cat:
+        # No interpolation for categorical - show discrete blocks
+        im = ax.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower', 
+                       interpolation='nearest')
+    else:
+        # Smooth interpolation for continuous-continuous
+        im = ax.imshow(heatmap, aspect='auto', cmap='RdBu_r', origin='lower',
+                       interpolation='bicubic',
+                       extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()])
+    
+    plt.colorbar(im, label='Predicted Match Quality')
+    
+    # Handle axis labels and ticks
+    if x_is_cat:
+        ax.set_xticks(np.arange(len(x_vals)))
+        ax.set_xticklabels([int(v) for v in x_vals])
+        ax.set_xlabel(f'{x_feature} (Category)')
+    else:
+        if not (x_is_cat or y_is_cat):  # Only set these if using extent
+            pass  # extent handles it
+        else:
+            ax.set_xticks(np.linspace(0, len(x_vals)-1, 5))
+            ax.set_xticklabels([f'{v:.1f}' for v in np.linspace(x_vals.min(), x_vals.max(), 5)])
+        ax.set_xlabel(f'{x_feature} (Standardized)')
+    
+    if y_is_cat:
+        ax.set_yticks(np.arange(len(y_vals)))
+        ax.set_yticklabels([int(v) for v in y_vals])
+        ax.set_ylabel(f'{y_feature} (Category)')
+    else:
+        if not (x_is_cat or y_is_cat):  # Only set these if using extent
+            pass  # extent handles it
+        else:
+            ax.set_yticks(np.linspace(0, len(y_vals)-1, 5))
+            ax.set_yticklabels([f'{v:.1f}' for v in np.linspace(y_vals.min(), y_vals.max(), 5)])
+        ax.set_ylabel(f'{y_feature} (Standardized)')
+    
+    ax.set_title(f'Interaction: {x_feature} vs {y_feature}')
     
     output_dir = processor.cfg.OUTPUT_PATH
     os.makedirs(output_dir, exist_ok=True)
@@ -255,3 +293,4 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
     plt.savefig(path)
     print(f"Saved heatmap to {path}")
     plt.close()
+
