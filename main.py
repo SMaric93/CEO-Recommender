@@ -10,10 +10,16 @@ import argparse
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from ceo_firm_matching.config import Config
-from data_processing import DataProcessor, CEOFirmDataset
-from model import CEOFirmMatcher, ModelWrapper, train_model
-from visualization import explain_model_pdp, plot_interaction_heatmap
+from ceo_firm_matching import (
+    Config,
+    DataProcessor,
+    CEOFirmDataset,
+    ModelWrapper,
+    train_model,
+    explain_model_pdp,
+    plot_interaction_heatmap,
+    generate_synthetic_data,
+)
 
 
 def main():
@@ -30,7 +36,6 @@ def main():
     
     if args.synthetic:
         print("Using SYNTHETIC data...")
-        from synthetic_data import generate_synthetic_data
         raw_df = generate_synthetic_data(1000)
     else:
         raw_df = processor.load_data()

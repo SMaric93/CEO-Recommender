@@ -154,6 +154,28 @@ class DataProcessor:
             self.cfg.CEO_CAT_COLS
         )
 
+    def get_flat_features(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Transforms a DataFrame and returns a flattened numpy array of features.
+        
+        Layout: [Firm Numeric] [Firm Cat] [CEO Numeric] [CEO Cat]
+        
+        This is useful for explainability tools (SHAP, PDP) that expect a 2D array.
+        
+        Args:
+            df: DataFrame with required columns (will be transformed using fitted scalers/encoders)
+            
+        Returns:
+            2D numpy array of shape (n_samples, n_features)
+        """
+        data_dict = self.transform(df)
+        return np.hstack([
+            data_dict['firm_numeric'].numpy(),
+            data_dict['firm_cat'].numpy(),
+            data_dict['ceo_numeric'].numpy(),
+            data_dict['ceo_cat'].numpy()
+        ])
+
 
 class CEOFirmDataset(Dataset):
     """PyTorch Dataset for mini-batch training."""

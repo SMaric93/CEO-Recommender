@@ -22,20 +22,18 @@ Usage:
 """
 
 import os
-import sys
 import argparse
 import logging
 import torch
 from torch.utils.data import DataLoader
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from ceo_firm_matching.structural_config import StructuralConfig
-from ceo_firm_matching.structural_data import StructuralDataProcessor
-from ceo_firm_matching.structural_model import StructuralDistillationNet
-from ceo_firm_matching.structural_training import train_structural_model
-from ceo_firm_matching.structural_explain import IlluminationEngine
+from ceo_firm_matching import (
+    StructuralConfig,
+    StructuralDataProcessor,
+    StructuralDistillationNet,
+    train_structural_model,
+    IlluminationEngine,
+)
 
 # Configure Logging
 logging.basicConfig(
@@ -155,4 +153,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

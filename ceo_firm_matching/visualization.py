@@ -1,12 +1,15 @@
 """
 CEO-Firm Matching: Visualization Module
 
-Interaction heatmap plotting for model interpretation.
+Interaction heatmap plotting, PDP, and SHAP for model interpretation.
 """
 import torch
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+import shap
 import os
+from typing import List
 
 from .config import Config
 from .model import CEOFirmMatcher
@@ -173,3 +176,118 @@ def plot_interaction_heatmap(model: CEOFirmMatcher, processor: DataProcessor,
     print(f"Saved heatmap to {path}")
     plt.close()
 
+
+def explain_model_pdp(wrapper, df: pd.DataFrame, features_to_plot: List[str]):
+    """Generates Partial Dependence Plots for specified features.
+    
+    Args:
+        wrapper: ModelWrapper instance with trained model
+        df: DataFrame to use for computing PDPs  
+        features_to_plot: List of feature names to generate plots for
+    """
+    print("\nGenerating Partial Dependence Plots (PDP)...")
+    
+    # Use helper to get flattened feature matrix
+    X_flat = wrapper.processor.get_flat_features(df)
+    
+    feature_names = wrapper.processor.get_feature_names()
+    
+    # Find indices of features to plot
+    indices_to_plot = []
+    valid_names = []
+    for name in features_to_plot:
+        if name in feature_names:
+            indices_to_plot.append(feature_names.index(name))
+            valid_names.append(name)
+        else:
+            print(f"Warning: Feature '{name}' not found in model inputs.")
+            
+    if not indices_to_plot:
+        return
+
+    # Determine which features are categorical
+    all_cat_cols = set(wrapper.processor.cfg.FIRM_CAT_COLS + wrapper.processor.cfg.CEO_CAT_COLS)
+    
+    # Manual PDP Loop
+    fig, axes = plt.subplots(1, len(indices_to_plot), figsize=(5 * len(indices_to_plot), 4))
+    if len(indices_to_plot) == 1:
+        axes = [axes]
+        
+    for ax, idx, name in zip(axes, indices_to_plot, valid_names):
+        vals = X_flat[:, idx]
+        is_categorical = name in all_cat_cols
+        
+        # Use discrete unique values for categorical, continuous grid otherwise
+        if is_categorical:
+            grid = np.sort(np.unique(vals.astype(int)))
+        else:
+            grid = np.linspace(vals.min(), vals.max(), 50)
+        
+        pdp_y = []
+        sample_indices = np.random.choice(X_flat.shape[0], min(1000, X_flat.shape[0]), replace=False)
+        X_sample = X_flat[sample_indices].copy()
+        
+        for val in grid:
+            X_temp = X_sample.copy()
+            X_temp[:, idx] = val
+            preds = wrapper.predict(X_temp)
+            pdp_y.append(np.mean(preds))
+        
+        # Bar plot for categorical, line plot for continuous
+        if is_categorical:
+            ax.bar(grid, pdp_y, color='steelblue', edgecolor='black', alpha=0.8)
+            ax.set_xticks(grid)
+            ax.set_xlabel("Category Code")
+        else:
+            ax.plot(grid, pdp_y, color='blue')
+            ax.set_xlabel("Standardized Value")
+            
+        ax.set_title(f"PDP: {name}")
+        ax.set_ylabel("Avg Match Score")
+        ax.grid(True, alpha=0.3, axis='y')
+        
+    plt.tight_layout()
+    output_dir = wrapper.processor.cfg.OUTPUT_PATH
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "pdp_plots.svg")
+    plt.savefig(save_path)
+    print(f"Saved PDP plots to {save_path}")
+    plt.close()
+
+
+def explain_model_shap(wrapper, df: pd.DataFrame):
+    """Generates SHAP summary plot for feature importance analysis.
+    
+    Args:
+        wrapper: ModelWrapper instance with trained model
+        df: DataFrame to use for SHAP analysis
+    """
+    print("\nCalculating SHAP values (this may take a moment)...")
+    
+    # Use helper to get flattened feature matrix
+    X_flat = wrapper.processor.get_flat_features(df)
+    feature_names = wrapper.processor.get_feature_names()
+    
+    # Background Data (Summary) for KernelExplainer
+    X_summary = shap.kmeans(X_flat, 25)
+    
+    # Explainer
+    explainer = shap.KernelExplainer(wrapper.predict, X_summary)
+    
+    # Calculate SHAP values on a subset
+    subset_size = min(200, X_flat.shape[0])
+    X_subset = X_flat[:subset_size]
+    
+    shap_values = explainer.shap_values(X_subset)
+    
+    # Plot
+    plt.figure()
+    shap.summary_plot(shap_values, X_subset, feature_names=feature_names, show=False)
+    plt.title("SHAP Feature Importance")
+    plt.tight_layout()
+    output_dir = wrapper.processor.cfg.OUTPUT_PATH
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "shap_summary.svg")
+    plt.savefig(save_path)
+    print(f"Saved SHAP summary to {save_path}")
+    plt.close()
