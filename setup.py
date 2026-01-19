@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ceo_firm_matching",
-    version="0.1.0",
+    version="0.2.0",
     description="Two Tower Recommender System for CEO-Firm Matching",
     author="Gemini Agent",
     packages=find_packages(),
