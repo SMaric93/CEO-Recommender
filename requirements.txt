@@ -1,6 +1,15 @@
+# Core dependencies
 torch
 pandas
 numpy
 matplotlib
 scikit-learn
 shap
+statsmodels
+
+# Optional: WRDS access
+# wrds
+
+# Development
+pytest
+pytest-cov

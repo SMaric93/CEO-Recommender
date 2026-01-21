@@ -26,7 +26,11 @@ from .structural_visualization import (
     create_structural_report,
 )
 
-__version__ = "0.2.0"
+# WRDS Utilities (new in v0.3.0)
+from . import wrds
+from . import analysis
+
+__version__ = "0.3.0"
 
 __all__ = [
     # === Two Tower Model ===
