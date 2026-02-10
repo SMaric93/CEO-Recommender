@@ -138,16 +138,25 @@ class TwoTowersAnalyzer:
         train_preds, train_targets = [], []
         val_preds, val_targets = [], []
         
+        device = self.config.DEVICE
         with torch.no_grad():
             for batch in train_loader:
-                pred = model(batch).cpu().numpy()
+                batch = {k: v.to(device) for k, v in batch.items()}
+                pred = model(
+                    batch['firm_numeric'], batch['firm_cat'],
+                    batch['ceo_numeric'], batch['ceo_cat']
+                ).cpu().numpy().flatten()
                 train_preds.extend(pred)
-                train_targets.extend(batch['target'].cpu().numpy())
+                train_targets.extend(batch['target'].cpu().numpy().flatten())
             
             for batch in val_loader:
-                pred = model(batch).cpu().numpy()
+                batch = {k: v.to(device) for k, v in batch.items()}
+                pred = model(
+                    batch['firm_numeric'], batch['firm_cat'],
+                    batch['ceo_numeric'], batch['ceo_cat']
+                ).cpu().numpy().flatten()
                 val_preds.extend(pred)
-                val_targets.extend(batch['target'].cpu().numpy())
+                val_targets.extend(batch['target'].cpu().numpy().flatten())
         
         train_corr = np.corrcoef(train_preds, train_targets)[0, 1]
         val_corr = np.corrcoef(val_preds, val_targets)[0, 1]
@@ -160,7 +169,7 @@ class TwoTowersAnalyzer:
             val_loss=0.0,
             train_corr=train_corr,
             val_corr=val_corr,
-            embedding_dim=self.config.EMBEDDING_DIM,
+            embedding_dim=getattr(self.config, 'EMBEDDING_DIM', 64),
             model=model
         )
         
@@ -186,16 +195,15 @@ class TwoTowersAnalyzer:
         # Reset to default
         self.config.LEARNING_RATE = 1e-3
         
-        # Embedding dimension sensitivity
-        for dim in [32, 64, 128]:
-            self.config.EMBEDDING_DIM = dim
-            name = f"emb_{dim}"
-            result = self.run_training(name)
-            if result:
-                results[name] = result
-        
-        # Reset
-        self.config.EMBEDDING_DIM = 64
+        # Embedding dimension sensitivity (skip if config doesn't support it)
+        if hasattr(self.config, 'EMBEDDING_DIM'):
+            for dim in [32, 64, 128]:
+                self.config.EMBEDDING_DIM = dim
+                name = f"emb_{dim}"
+                result = self.run_training(name)
+                if result:
+                    results[name] = result
+            self.config.EMBEDDING_DIM = 64
         
         return results
     

@@ -30,46 +30,51 @@ from .structural_visualization import (
 from . import wrds
 from . import analysis
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
+
+# === Extension Modules (v0.4.0) ===
+from . import enriched_features       # Extension 1: Enriched CEO Tower
+from . import contrastive             # Extension 2: Contrastive Learning
+from . import multitask_model         # Extension 4: Multi-Task Learning
+from . import temporal_model          # Extension 5: Time-Varying Embeddings
+from . import industry_model          # Extension 6: Industry-Specific Matching
+from . import network_features        # Extension 8: Board Interlock Network
+from . import analytical_extensions   # Extensions 3, 7, 9, 10
 
 __all__ = [
     # === Two Tower Model ===
-    # Configuration
     "Config",
-    # Data
     "DataProcessor",
     "CEOFirmDataset",
-    # Model
     "CEOFirmMatcher",
-    # Training
     "train_model",
-    # Explainability
     "ModelWrapper",
     "explain_model_pdp",
     "explain_model_shap",
-    # Visualization
     "plot_interaction_heatmap",
-    # Synthetic Data
     "generate_synthetic_data",
     "generate_structural_synthetic_data",
-    
+
     # === Structural Distillation Network ===
-    # Configuration
     "StructuralConfig",
-    # Data
     "StructuralDataProcessor",
     "DistillationDataset",
-    # Model
     "StructuralDistillationNet",
-    # Training
     "train_structural_model",
-    # Explainability
     "IlluminationEngine",
-    # Visualization
     "plot_type_probability_distributions",
     "plot_expected_match_distribution",
     "plot_type_confusion_matrix",
     "plot_feature_type_correlation",
     "create_structural_report",
+
+    # === Extensions (v0.4.0) ===
+    "enriched_features",
+    "contrastive",
+    "multitask_model",
+    "temporal_model",
+    "industry_model",
+    "network_features",
+    "analytical_extensions",
 ]
 

@@ -345,7 +345,10 @@ def pull_boardex_ciq_company_match(db) -> pd.DataFrame:
 
 def pull_wrds_people_link(db) -> pd.DataFrame:
     """
-    Pull direct BoardEx-CIQ person link.
+    Pull direct BoardEx-CIQ person link from WRDS People Link.
+
+    Uses wrdsapps_plink_boardex_ciq.boardex_ciq_link (the curated link table)
+    which maps BoardEx directorid to CIQ personid with match quality scores.
 
     Args:
         db: WRDS connection object
@@ -353,29 +356,44 @@ def pull_wrds_people_link(db) -> pd.DataFrame:
     Returns:
         DataFrame mapping BoardEx directorid to CIQ personid
     """
-    print("📊 Pulling WRDS People Link...")
+    print("📊 Pulling WRDS People Link (BoardEx → CIQ)...")
+
+    # Primary: curated link table with score
     try:
         query = """
-        SELECT boardex_directorid as directorid, ciq_personid as personid
-        FROM wrdsapps.peoplelink
-        WHERE boardex_directorid IS NOT NULL AND ciq_personid IS NOT NULL
+        SELECT directorid, personid, score
+        FROM wrdsapps_plink_boardex_ciq.boardex_ciq_link
+        WHERE directorid IS NOT NULL AND personid IS NOT NULL
         """
         df = db.raw_sql(query)
-        print(f"   ✓ Retrieved {len(df):,} person links")
+        df['directorid'] = pd.to_numeric(df['directorid'], errors='coerce')
+        df['personid'] = pd.to_numeric(df['personid'], errors='coerce')
+        df['score'] = pd.to_numeric(df['score'], errors='coerce')
+        # Keep best match per directorid (score=1 is highest quality)
+        df = df.sort_values('score').drop_duplicates('directorid')
+        print(f"   ✓ Retrieved {len(df):,} person links (best match per director)")
+        print(f"   Score distribution: {df['score'].describe()[['mean','min','max']].to_dict()}")
         return df
     except Exception as e:
-        print(f"   ℹ️ peoplelink not accessible: {e}")
-        try:
-            query = """
-            SELECT directorid, personid
-            FROM wrdsapps.link_boardex_ciq
-            WHERE directorid IS NOT NULL AND personid IS NOT NULL
-            """
-            df = db.raw_sql(query)
-            print(f"   ✓ Retrieved {len(df):,} person links (via link_boardex_ciq)")
-            return df
-        except:
-            return pd.DataFrame()
+        print(f"   ℹ️ boardex_ciq_link not accessible: {e}")
+
+    # Fallback: broader boardex_ciq table
+    try:
+        query = """
+        SELECT directorid, personid, score
+        FROM wrdsapps_plink_boardex_ciq.boardex_ciq
+        WHERE directorid IS NOT NULL AND personid IS NOT NULL
+        """
+        df = db.raw_sql(query)
+        df['directorid'] = pd.to_numeric(df['directorid'], errors='coerce')
+        df['personid'] = pd.to_numeric(df['personid'], errors='coerce')
+        df['score'] = pd.to_numeric(df['score'], errors='coerce')
+        df = df.sort_values('score').drop_duplicates('directorid')
+        print(f"   ✓ Retrieved {len(df):,} person links via boardex_ciq")
+        return df
+    except Exception as e:
+        print(f"   ✗ boardex_ciq also failed: {e}")
+        return pd.DataFrame()
 
 
 def pull_ciq_gvkey(db) -> pd.DataFrame:
